@@ -291,7 +291,7 @@ def build_feat_safety(output_dir=None):
     logger.info("Building feat_safety from FAERS...")
 
     faers_dir = Path("data/raw/openfda_faers")
-    files = sorted(faers_dir.glob("faers_part_*.parquet"))
+    files = sorted(faers_dir.glob("faers_*.parquet"))
     if not files:
         logger.error("No FAERS data found")
         return
