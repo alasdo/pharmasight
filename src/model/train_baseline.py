@@ -38,6 +38,26 @@ FEATURES_B = FEATURES_A + [
     "adverse_event_count", "serious_event_count", "ae_spike",
 ]
 
+FEATURES_C = FEATURES_B + [
+    # + News NLP features (currently empty — will populate as corpus grows)
+    "news_sentiment_mean", "news_sentiment_std",
+    "news_doc_count", "news_drug_mention_count",
+]
+
+FEATURES_D = FEATURES_B + [
+    # + Regulation NLP features
+    "reg_doc_count", "reg_rule_count", "reg_proposed_rule_count",
+    "reg_sentiment_mean", "reg_sentiment_std",
+    "reg_drug_mention_count", "reg_docs_with_drugs",
+    "reg_evt_approval", "reg_evt_shortage", "reg_evt_safety",
+    "reg_evt_pricing", "reg_evt_manufacturing", "reg_evt_policy",
+]
+
+FEATURES_E = FEATURES_D + [
+    "news_sentiment_mean", "news_sentiment_std",
+    "news_doc_count", "news_drug_mention_count",
+]
+
 TARGET = "number_of_prescriptions"
 
 
@@ -145,6 +165,22 @@ def load_and_prepare():
                       right_on=["date", "drug_name_lower"], how="left")
         df = df.drop(columns=["product_name_lower", "drug_name_lower"], errors="ignore")
         logger.info(f"  Joined feat_safety")
+        # Join feat_regulation
+        reg_path = Path("data/processed/feat_regulation.parquet")
+        if reg_path.exists():
+            reg = pd.read_parquet(reg_path)
+            reg = reg.drop_duplicates(subset=["date"], keep="first")
+            df = df.merge(reg, on="date", how="left")
+            logger.info(f"  Joined feat_regulation: {len(reg)} quarters")
+
+        # Join feat_news
+        news_path = Path("data/processed/feat_news.parquet")
+        if news_path.exists():
+            news = pd.read_parquet(news_path)
+            if len(news) > 0:
+                news = news.drop_duplicates(subset=["date"], keep="first")
+                df = df.merge(news, on="date", how="left")
+                logger.info(f"  Joined feat_news: {len(news)} quarters")
 
     logger.info(f"  Final shape: {df.shape}")
     return df
@@ -372,6 +408,11 @@ def run_all():
     if lgbm_b_results:
         all_results.append(lgbm_b_results)
 
+    # 4. LightGBM Config D (+ regulation NLP features)
+    lgbm_d_results, model_d = train_lightgbm(train, val, test, FEATURES_D, "D")
+    if lgbm_d_results:
+        all_results.append(lgbm_d_results)
+
     # ── Results Summary ──
     logger.info("\n" + "=" * 80)
     logger.info("ABLATION RESULTS SUMMARY")
@@ -391,6 +432,11 @@ def run_all():
         mae_impr = (lgbm_a_results["mae"] - lgbm_b_results["mae"]) / lgbm_a_results["mae"] * 100
         rmse_impr = (lgbm_a_results["rmse"] - lgbm_b_results["rmse"]) / lgbm_a_results["rmse"] * 100
         logger.info(f"\n  Config B vs A: MAE {mae_impr:+.1f}% | RMSE {rmse_impr:+.1f}%")
+
+    if lgbm_b_results and lgbm_d_results:
+        mae_impr = (lgbm_b_results["mae"] - lgbm_d_results["mae"]) / lgbm_b_results["mae"] * 100
+        rmse_impr = (lgbm_b_results["rmse"] - lgbm_d_results["rmse"]) / lgbm_b_results["rmse"] * 100
+        logger.info(f"  Config D vs B: MAE {mae_impr:+.1f}% | RMSE {rmse_impr:+.1f}%")
 
     # Save results
     results_path = RESULTS_DIR / "baseline_results.json"
