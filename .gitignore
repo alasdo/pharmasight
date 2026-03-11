@@ -1,0 +1,12 @@
+.venv/
+data/raw/
+data/validated/
+data/processed/
+data/metadata/
+__pycache__/
+*.pyc
+.env
+*.parquet
+*.csv
+.DS_Store
+mlruns/

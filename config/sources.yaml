@@ -1,0 +1,49 @@
+medicaid_sdud:
+  base_url: "https://download.medicaid.gov/data"
+  years: [2019, 2020, 2021, 2022, 2023]
+  format: csv
+  output_dir: data/raw/medicaid_sdud
+
+cdc_fluview:
+  base_url: "https://api.delphi.cmu.edu/epidata/fluview/"
+  start_year: 2019
+  end_year: 2023
+  output_dir: data/raw/cdc_fluview
+
+fda_shortages:
+  base_url: "https://api.fda.gov/drug"
+  endpoint: shortages.json
+  output_dir: data/raw/fda_shortages
+
+drugs_at_fda:
+  bulk_url: "https://download.open.fda.gov/drug/drugsfda/drug-drugsfda-0001-of-0001.json.zip"
+  output_dir: data/raw/drugs_at_fda
+
+orange_book:
+  download_url: "https://www.fda.gov/media/76860/download"
+  output_dir: data/raw/orange_book
+
+openfda_faers:
+  index_url: "https://api.fda.gov/download.json"
+  max_partitions: 20
+  output_dir: data/raw/openfda_faers
+
+fda_recalls:
+  base_url: "https://api.fda.gov/drug"
+  endpoint: enforcement.json
+  output_dir: data/raw/fda_recalls
+
+federal_register:
+  base_url: "https://www.federalregister.gov/api/v1"
+  start_date: "2019-01-01"
+  end_date: "2025-12-31"
+  output_dir: data/raw/federal_register
+
+regulations_gov:
+  base_url: "https://api.regulations.gov/v4"
+  output_dir: data/raw/regulations_gov
+
+clinical_trials:
+  base_url: "https://clinicaltrials.gov/api/v2/studies"
+  phases: ["PHASE3"]
+  output_dir: data/raw/clinical_trials
