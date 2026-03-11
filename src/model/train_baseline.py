@@ -45,12 +45,11 @@ FEATURES_C = FEATURES_B + [
 ]
 
 FEATURES_D = FEATURES_B + [
-    # + Regulation NLP features
+    # Market-wide regulation features (best ones only)
     "reg_doc_count", "reg_rule_count", "reg_proposed_rule_count",
-    "reg_sentiment_mean", "reg_sentiment_std",
-    "reg_drug_mention_count", "reg_docs_with_drugs",
-    "reg_evt_approval", "reg_evt_shortage", "reg_evt_safety",
-    "reg_evt_pricing", "reg_evt_manufacturing", "reg_evt_policy",
+    # Drug-specific regulation features
+    "reg_drug_doc_count", "reg_drug_approval_count",
+    "reg_drug_safety_count", "reg_drug_manufacturing_count",
 ]
 
 FEATURES_E = FEATURES_D + [
@@ -165,22 +164,23 @@ def load_and_prepare():
                       right_on=["date", "drug_name_lower"], how="left")
         df = df.drop(columns=["product_name_lower", "drug_name_lower"], errors="ignore")
         logger.info(f"  Joined feat_safety")
-        # Join feat_regulation
+        # Join feat_regulation (market-wide — joins on date only)
         reg_path = Path("data/processed/feat_regulation.parquet")
         if reg_path.exists():
             reg = pd.read_parquet(reg_path)
             reg = reg.drop_duplicates(subset=["date"], keep="first")
             df = df.merge(reg, on="date", how="left")
-            logger.info(f"  Joined feat_regulation: {len(reg)} quarters")
+            logger.info(f"  Joined feat_regulation (market): {len(reg)} quarters")
 
-        # Join feat_news
-        news_path = Path("data/processed/feat_news.parquet")
-        if news_path.exists():
-            news = pd.read_parquet(news_path)
-            if len(news) > 0:
-                news = news.drop_duplicates(subset=["date"], keep="first")
-                df = df.merge(news, on="date", how="left")
-                logger.info(f"  Joined feat_news: {len(news)} quarters")
+        # Join feat_regulation_drug (drug-specific — joins on date + drug name)
+        reg_drug_path = Path("data/processed/feat_regulation_drug.parquet")
+        if reg_drug_path.exists():
+            reg_drug = pd.read_parquet(reg_drug_path)
+            df["product_name_lower"] = df["product_name"].astype(str).str.strip().str.lower()
+            reg_drug = reg_drug.drop_duplicates(subset=["date", "product_name_lower"], keep="first")
+            df = df.merge(reg_drug, on=["date", "product_name_lower"], how="left")
+            df = df.drop(columns=["product_name_lower"], errors="ignore")
+            logger.info(f"  Joined feat_regulation_drug: {len(reg_drug)} drug-quarter rows")
 
     logger.info(f"  Final shape: {df.shape}")
     return df
