@@ -131,25 +131,51 @@ def build_feat_supply(output_dir=None):
         shortages = pd.read_parquet(shortage_path)
         logger.info(f"Shortages: {len(shortages):,} records")
 
-        # Parse the generic_name for matching
-        shortages["generic_name_lower"] = shortages["generic_name"].str.strip().str.lower()
-
-        # Get unique product names from demand for matching
-        product_names = fact[["ndc_11", "product_name"]].drop_duplicates()
-        product_names["product_name_lower"] = product_names["product_name"].str.strip().str.lower()
-
-        # Count active shortages per quarter
-        # Since shortages don't have NDC, we'll count at the generic name level
         shortage_status = shortages.groupby("status").size()
         logger.info(f"  Shortage status: {shortage_status.to_dict()}")
 
-        # Binary: any current shortage
+        # Extract base ingredient: first word of generic_name, lowercased
         current_shortages = shortages[shortages["status"].str.lower().str.contains("current|ongoing", na=False)]
-        shortage_drugs = set(current_shortages["generic_name_lower"].dropna().unique())
-        logger.info(f"  Currently in shortage: {len(shortage_drugs)} unique drugs")
+        shortage_first_words = set()
+        for name in current_shortages["generic_name"].dropna().unique():
+            first_word = name.strip().split()[0].lower()
+            if len(first_word) >= 6:  # skip short words like "amino" that match too broadly
+                shortage_first_words.add(first_word)
+
+        logger.info(f"  Shortage base ingredients (first word): {len(shortage_first_words)}")
+        logger.info(f"  Samples: {sorted(list(shortage_first_words))[:15]}")
+
+        # Get unique SDUD product names
+        sdud_names = fact["product_name"].dropna().str.strip().str.lower().unique()
+        # Filter to names starting with a letter (skip "0.9% sodium" etc.)
+        sdud_names_alpha = [n for n in sdud_names if n and n[0].isalpha()]
+
+        # Match: SDUD name starts with a shortage ingredient
+        # OR shortage ingredient starts with the SDUD name (for truncated names)
+        shortage_sdud_matches = set()
+        for sdud_name in sdud_names_alpha:
+            for shortage_word in shortage_first_words:
+                # "albuterol" starts with "albuterol" ✓
+                # "albutero" (truncated) — "albuterol" starts with "albutero" ✓
+                # "carboplat" (truncated) — "carboplatin" starts with "carboplat" ✓
+                sdud_first = sdud_name.split()[0]
+                # Forward: SDUD starts with shortage word (e.g., "albuterol sulfate" starts with "albuterol")
+                # Reverse: shortage word starts with SDUD first word (for truncated names)
+                # Require at least 6 chars overlap to avoid false positives
+                if len(sdud_first) >= 6 and (
+                    sdud_first.startswith(shortage_word) or shortage_word.startswith(sdud_first)
+                ):
+                    shortage_sdud_matches.add(sdud_name)
+                    break
+
+        logger.info(f"  SDUD products matching shortages: {len(shortage_sdud_matches)}")
+        if shortage_sdud_matches:
+            samples = sorted([m for m in shortage_sdud_matches if len(m) > 3])[:15]
+            logger.info(f"  Sample matches: {samples}")
     else:
-        shortage_drugs = set()
+        shortage_sdud_matches = set()
         logger.warning("No shortage data found")
+
 
     # ── Recall features ──
     recall_path = Path("data/raw/fda_recalls/fda_recalls.parquet")
@@ -215,8 +241,8 @@ def build_feat_supply(output_dir=None):
     )
     feat["product_name_lower"] = feat["product_name"].str.strip().str.lower()
 
-    # Shortage flag (name-based matching)
-    feat["shortage_active"] = feat["product_name_lower"].isin(shortage_drugs).astype(int)
+    # Shortage flag (ingredient-based matching)
+    feat["shortage_active"] = feat["product_name_lower"].isin(shortage_sdud_matches).astype(int)
     logger.info(f"  Rows with active shortage: {feat['shortage_active'].sum():,}")
 
     # Generic competition count (from product dimension)
