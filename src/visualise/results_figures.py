@@ -104,28 +104,28 @@ def fig2_ablation_results():
 
     models = [r["model"] + "\n" + r["config"] for r in results]
     maes = [r["mae"] for r in results]
-    rmses = [r["rmse"] for r in results]
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Color map by config
+    color_map = {"baseline": MUTED, "A": ACCENT, "B": ACCENT2, "D": ACCENT3}
+    colors = [color_map.get(r["config"], MUTED) for r in results]
 
     # MAE comparison
-    colors = [MUTED if "Naive" in m else ACCENT if "A" in m else ACCENT2 for m in models]
     bars1 = ax1.bar(models, maes, color=colors, edgecolor="#1e1e2e", width=0.6)
     ax1.set_ylabel("Mean Absolute Error (Rx)")
     ax1.set_title("MAE by Model Configuration", fontweight="bold")
-
     for bar, mae in zip(bars1, maes):
-        ax1.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 5,
+        ax1.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 2,
                 f"{mae:.1f}", ha="center", fontsize=10, color="#e2e8f0")
 
-    # MAPE comparison
-    mapes = [r.get("mape", 0) for r in results]
-    bars2 = ax2.bar(models, mapes, color=colors, edgecolor="#1e1e2e", width=0.6)
-    ax2.set_ylabel("MAPE (%)")
-    ax2.set_title("MAPE by Model Configuration", fontweight="bold")
-
-    for bar, m in zip(bars2, mapes):
-        ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1,
+    # sMAPE comparison
+    smapes = [r.get("smape", r.get("mape", 0)) for r in results]
+    bars2 = ax2.bar(models, smapes, color=colors, edgecolor="#1e1e2e", width=0.6)
+    ax2.set_ylabel("sMAPE (%)")
+    ax2.set_title("sMAPE by Model Configuration", fontweight="bold")
+    for bar, m in zip(bars2, smapes):
+        ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.5,
                 f"{m:.1f}%", ha="center", fontsize=10, color="#e2e8f0")
 
     for ax in [ax1, ax2]:
@@ -139,7 +139,7 @@ def fig2_ablation_results():
 
 
 def fig3_feature_importance():
-    """Figure 3: Feature importance for Config B."""
+    """Figure 3: Feature importance for best config (D)."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     results_path = Path("data/results/baseline_results.json")
@@ -149,18 +149,23 @@ def fig3_feature_importance():
     with open(results_path) as f:
         results = json.load(f)
 
-    # Find Config B results
-    config_b = [r for r in results if r.get("config") == "B"]
-    if not config_b:
-        logger.warning("No Config B results found")
+    # Find best config (D, then B, then A)
+    for target in ["D", "B", "A"]:
+        config = [r for r in results if r.get("config") == target]
+        if config:
+            break
+
+    if not config:
+        logger.warning("No model results found")
         return
 
-    importance = config_b[0].get("feature_importance_top10", {})
+    importance = config[0].get("feature_importance_top10", {})
     if not importance:
         logger.warning("No feature importance data")
         return
 
-    # Clean feature names for display
+    config_name = config[0]["config"]
+
     name_map = {
         "rx_rolling_mean_4": "Rolling Mean (4Q)",
         "rx_lag_1": "Lag 1 Quarter",
@@ -179,14 +184,28 @@ def fig3_feature_importance():
         "shortage_active": "Shortage Active ★",
         "adverse_event_count": "Adverse Events ★",
         "num_generic_competitors": "Generic Competitors ★",
+        "reg_rule_count": "Regulation Rules ★★",
+        "reg_doc_count": "Regulation Docs ★★",
+        "reg_drug_doc_count": "Drug-Specific Reg Docs ★★",
+        "reg_drug_approval_count": "Drug Reg Approvals ★★",
+        "reg_drug_safety_count": "Drug Reg Safety ★★",
+        "reg_drug_manufacturing_count": "Drug Reg Manufacturing ★★",
+        "reg_proposed_rule_count": "Proposed Rules ★★",
     }
 
     features = list(importance.keys())
     gains = list(importance.values())
     labels = [name_map.get(f, f) for f in features]
 
-    # Color: external features get accent2
-    colors = [ACCENT2 if "★" in name_map.get(f, "") else ACCENT for f in features]
+    # Color: demand=accent, structured external=accent2, NLP=accent3
+    def get_color(f):
+        if "★★" in name_map.get(f, ""):
+            return ACCENT3
+        if "★" in name_map.get(f, ""):
+            return ACCENT2
+        return ACCENT
+
+    colors = [get_color(f) for f in features]
 
     fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -194,15 +213,15 @@ def fig3_feature_importance():
                    edgecolor="#1e1e2e", alpha=0.85)
 
     ax.set_xlabel("Feature Importance (Gain)")
-    ax.set_title("Config B: Top 10 Features by Importance", fontweight="bold", pad=15)
+    ax.set_title(f"Config {config_name}: Top 10 Features by Importance", fontweight="bold", pad=15)
     ax.grid(axis="x", alpha=0.3)
     ax.set_axisbelow(True)
 
-    # Legend
     from matplotlib.patches import Patch
     legend_elements = [
         Patch(facecolor=ACCENT, label="Demand features"),
-        Patch(facecolor=ACCENT2, label="External features ★"),
+        Patch(facecolor=ACCENT2, label="Structured external ★"),
+        Patch(facecolor=ACCENT3, label="NLP regulation ★★"),
     ]
     ax.legend(handles=legend_elements, loc="lower right", framealpha=0.3)
 
@@ -210,7 +229,6 @@ def fig3_feature_importance():
     plt.savefig(OUTPUT_DIR / "fig3_feature_importance.png")
     plt.close()
     logger.info("Saved fig3_feature_importance.png")
-
 
 def fig4_error_by_tier():
     """Figure 4: Error analysis by prescription volume tier."""
@@ -231,9 +249,11 @@ def fig4_error_by_tier():
     x = np.arange(len(tiers))
     width = 0.25
 
+    color_map = {"baseline": MUTED, "A": ACCENT, "B": ACCENT2, "D": ACCENT3}
     for idx, r in enumerate(results):
         label = f"{r['model']} {r['config']}"
-        color = [MUTED, ACCENT, ACCENT2][idx]
+        color = color_map.get(r["config"], MUTED)
+        width = 0.8 / len(results)
 
         mae_vals = [r.get(f"mae_{t}", 0) for t in tiers]
         ax1.bar(x + idx * width, mae_vals, width, label=label, color=color,

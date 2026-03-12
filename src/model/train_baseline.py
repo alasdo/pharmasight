@@ -6,6 +6,7 @@ from loguru import logger
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 import json
 import sys
+import xgboost as xgb
 
 
 OUTPUT_DIR = Path("data/models")
@@ -275,6 +276,11 @@ def fill_features(train, val, test, available):
         for col in available:
             dataset.loc[:, col] = dataset[col].fillna(medians[col])
 
+    # Clean inf values (XGBoost requires finite values)
+    for dataset in [train, val, test]:
+        for col in available:
+            dataset.loc[:, col] = dataset[col].replace([np.inf, -np.inf], 0)
+
 
 def train_lightgbm(train, val, test, features, config_name, use_log_target=True):
     logger.info(f"Training LightGBM — Config {config_name} (log_target={use_log_target})...")
@@ -382,6 +388,102 @@ def train_lightgbm(train, val, test, features, config_name, use_log_target=True)
     return results, model
 
 
+def train_xgboost(train, val, test, features, config_name, use_log_target=True):
+    logger.info(f"Training XGBoost — Config {config_name} (log_target={use_log_target})...")
+
+    available = [f for f in features if f in train.columns]
+    missing = [f for f in features if f not in train.columns]
+    if missing:
+        logger.warning(f"  Missing features (skipped): {missing}")
+    logger.info(f"  Using {len(available)} features")
+
+    fill_features(train, val, test, available)
+
+    train_clean = train[train[TARGET] > 0].copy()
+    val_clean = val[val[TARGET] > 0].copy()
+    test_clean = test[test[TARGET] > 0].copy()
+
+    logger.info(f"  Train: {len(train_clean):,} | Val: {len(val_clean):,} | Test: {len(test_clean):,}")
+
+    if len(train_clean) < 100:
+        logger.error("  Not enough training data!")
+        return None, None
+
+    X_train = train_clean[available].values
+    y_train = train_clean[TARGET].values
+    X_val = val_clean[available].values
+    y_val = val_clean[TARGET].values
+    X_test = test_clean[available].values
+    y_test = test_clean[TARGET].values
+
+    if use_log_target:
+        y_train_model = np.log1p(y_train)
+        y_val_model = np.log1p(y_val)
+    else:
+        y_train_model = y_train
+        y_val_model = y_val
+
+    dtrain = xgb.DMatrix(X_train, label=y_train_model, feature_names=available)
+    dval = xgb.DMatrix(X_val, label=y_val_model, feature_names=available)
+    dtest = xgb.DMatrix(X_test, feature_names=available)
+
+    params = {
+        "objective": "reg:absoluteerror",
+        "eval_metric": "mae",
+        "learning_rate": 0.05,
+        "max_depth": 8,
+        "min_child_weight": 50,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "reg_alpha": 0.1,
+        "reg_lambda": 0.1,
+        "tree_method": "hist",
+        "device": "cuda",
+        "seed": 42,
+    }
+
+    model = xgb.train(
+        params,
+        dtrain,
+        num_boost_round=3000,
+        evals=[(dval, "val")],
+        early_stopping_rounds=100,
+        verbose_eval=200,
+    )
+
+    y_pred = model.predict(dtest)
+
+    if use_log_target:
+        y_pred = np.expm1(y_pred)
+
+    y_pred = np.maximum(y_pred, 0)
+
+    logger.info(f"  Prediction diagnostics:")
+    logger.info(f"    y_test  — mean: {y_test.mean():.1f}, median: {np.median(y_test):.1f}, max: {y_test.max():.1f}")
+    logger.info(f"    y_pred  — mean: {y_pred.mean():.1f}, median: {np.median(y_pred):.1f}, max: {y_pred.max():.1f}")
+
+    results = evaluate(y_test, y_pred, f"XGBoost Config {config_name}")
+    results["model"] = "XGBoost"
+    results["config"] = config_name
+    results["num_features"] = len(available)
+    results["best_iteration"] = model.best_iteration
+
+    importance = model.get_score(importance_type="gain")
+    importance = dict(sorted(importance.items(), key=lambda x: x[1], reverse=True))
+    results["feature_importance"] = importance
+
+    logger.info(f"  Best iteration: {model.best_iteration}")
+    logger.info(f"  Top 10 features by gain:")
+    for feat, gain in list(importance.items())[:10]:
+        logger.info(f"    {feat:30s} {gain:>12,.0f}")
+
+    model_path = OUTPUT_DIR / f"xgb_config_{config_name.lower()}.json"
+    model.save_model(str(model_path))
+    logger.info(f"  Model saved: {model_path}")
+
+    return results, model
+
+
 
 def run_all():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -412,6 +514,22 @@ def run_all():
     lgbm_d_results, model_d = train_lightgbm(train, val, test, FEATURES_D, "D")
     if lgbm_d_results:
         all_results.append(lgbm_d_results)
+
+    # 5. XGBoost Config A
+    xgb_a_results, xgb_model_a = train_xgboost(train, val, test, FEATURES_A, "A")
+    if xgb_a_results:
+        all_results.append(xgb_a_results)
+
+    # 6. XGBoost Config B
+    xgb_b_results, xgb_model_b = train_xgboost(train, val, test, FEATURES_B, "B")
+    if xgb_b_results:
+        all_results.append(xgb_b_results)
+
+    # 7. XGBoost Config D
+    xgb_d_results, xgb_model_d = train_xgboost(train, val, test, FEATURES_D, "D")
+    if xgb_d_results:
+        all_results.append(xgb_d_results)
+
 
     # ── Results Summary ──
     logger.info("\n" + "=" * 80)
